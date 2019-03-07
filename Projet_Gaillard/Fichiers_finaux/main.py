@@ -11,8 +11,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    BLOSUM = {}
-    mt.blosum()
     sequences = mt.ouvertureFASTA("balibase/RV11.unaligned/"+args.namefile)
     #TODO : ne pas oublier de rajouter les ID pour pouvoir enregistrer en FASTA
     alignments=mt.alignNseq(sequences,args.align)
