@@ -13,6 +13,7 @@ File structure :
         B/ PDB analysis functions
         C/ Structure information retrieval
         D/ Clustering functions
+        E/ Template class for Needleman-Wunsch algorithm
     I/ 2 sequence alignment with linear Needleman-Wunsch
     II/ N sequence alignment with complex linear Needleman-Wunsch
     III/ Scoring of alignment quality
@@ -62,28 +63,13 @@ def extract_file_bla(filename):
     return t
 
 # Initialisation of BLOSUM matrix gloablly, so that it only needs to be charged once   
-BLOSUM = {}
-def blosum():
-    ''' Initialisation of BLOSUM matrix from file blosum62.bla if it's not already done '''
-    global BLOSUM
-    if BLOSUM == {}:
-        BLOSUM = extract_file_bla('blosum62.bla')
-    
-def cout_blosum(a, b, mat=None): 
-    """ returns BLOSUM cost associated to AA a and b """
-    if mat == None:
-        blosum()
-        mat = BLOSUM
-    return mat[a][b]
+BLOSUM = extract_file_bla('blosum62.bla')
 
 ############################################################ B/ PDB analysis functions #####################################################"
     
 from Bio.PDB.MMCIFParser import MMCIFParser
 from Bio.PDB.PDBList import PDBList
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from Bio.PDB.Polypeptide import PPBuilder
 from Bio import SeqIO
-from Bio.SeqRecord import SeqRecord
 import os
 import numpy as np
 
@@ -98,7 +84,7 @@ def ouvertureFASTA(fichier):
     ''' Same as above '''
     handle = open(fichier+".fasta")
     seqs = []
-    for seqrec in Bio.SeqIO.parse(handle, "fasta"):
+    for seqrec in SeqIO.parse(handle, "fasta"):
         seqs.append(seqrec)
     handle.close()
     return seqs
@@ -124,6 +110,8 @@ def change_PDB_files():
             os.rename("PDB/"+n+"/"+fich,"PDB/"+fich)
 
 ############################################################### C/ Structure information retrieval ####################################################
+            
+from Bio.PDB import HSExposureCB
         
 def get_info_mmcif(file):
     ''' Computes the list of barycenters for each chain in the structure stored in file which must be a .cif
@@ -194,11 +182,33 @@ def decode_enf(file_id):
             values.append(float(tokens[1]))
     return values
 
+def get_descriptors(file):
+    ''' Gets descriptors for each residue in the protein's structure, 
+        including the HSExposure and the coordinates of the alpha carbon '''
+    parser = MMCIFParser()
+    structure = parser.get_structure(file.split('.')[0],file)
+    vca = []
+    HSE = []
+    names = []
+    model = structure[0]
+    hse = HSExposureCB(model)
+    for chain in model:
+        for residue in chain:
+            names.append(residue.get_resname())
+            if residue.has_id('CA'):
+                vca.append(residue['CA'].get_vector())
+                hse_ = hse[(chain.id, residue.id)]
+                HSE.append((hse_[0], hse_[1]))
+            else:
+                vca.append(None)
+                HSE.append(None)
+    dic = {"name" : names, "hse" : HSE, "coord" : vca}
+    return dic
+
 ############################################################## D/ Clustering functions ######################################################"
 
 import networkx as nx
 import graphviz as gv
-import matplotlib.pyplot as plt
 
 def to_table(t):
     ''' Pour le rendre utilisable on transforme la matrice des distances 
@@ -354,11 +364,12 @@ def find_leaves(tree):
     # Pour chaque noeud on ajoute +1 à son père
     for i in tree:
         father = tree[i]
-        sons[father] += 1
+        if i != father:
+            sons[father] += 1
     leaves = []
-    # Les feuilles sont celles n'ayant pas de fils donc ceux dont sons[i] == 0
+    # Les feuilles sont celles n'ayant pas de fils donc ceux dont sons[i] == 0, et dans le cas de deux noeuds seulement, il faut compter sons < 2 
     for i in sons:
-        if sons[i] == 0:
+        if sons[i] < 2:
             leaves.append(i)
     return leaves
 
@@ -591,306 +602,335 @@ def reverse_tree(tree):
         rev[parent].append(node)
     return rev
 
+###################################################### E/ Template class for Needleman-Wunsch algorithm ######################################
+    
+# Different cost functions that may be used in the NW algo
+    
+def cout_blosum(seq1, i, seq2, j, g=lambda x : 11, e=lambda x : 1, mat=BLOSUM): #mat doit être la matrice BLOSUM
+    a = seq1["seq"][i]
+    b = seq2["seq"][j]
+    if a == "-":
+        if b == "-":
+            return 0
+        if j > 1 and seq2["seq"][j-1] == "-":
+            return -e(b)
+        return -g(b)
+    if b == "-":
+        if i > 1 and seq1["seq"][i-1] == "-":
+            return -e(a)
+        return -g(a)
+    return mat[a][b]
+    
+def cout_bidon(seq1, i, seq2, j):
+    a = seq1["seq"][i]
+    b = seq2["seq"][j]
+    if a==b:
+        return 8
+    return -2
+
+def cout_enf(seq1, i, seq2, j):
+    if "enf" in seq1 and "enf" in seq2:
+        c = -abs(seq1["enf"][i] - seq2["enf"][j])
+        return c
+    return 0
+
+def cout_hse(seq1, i, seq2, j):
+    if "hse" in seq1 and "hse" in seq2 and seq1["hse"][i] != None and seq2["hse"][j] != None:
+        c = -(abs(seq1["hse"][i][0] - seq2["hse"][j][0]) + abs(seq1["hse"][i][1] - seq2["hse"][j][1]))
+        return c
+    return 0
+    
+class NeedlemanWunsch:
+    ''' Class for Needleman-Wunsch algorithm
+        Can be initialized with different parameters :
+            - cost_functions : list of cost functions that applies when comparing two residues
+            - cost_coefs : list of coefficients to multiply the previous cost functions. Sum must be 1
+            - gap_opening_function and gap_extending_function : how to penalize the alignment between a residue and a gap
+            - clustering : method for clustering, ie "NJ" for Neighbor Joining or "UPGMA"
+    '''
+    
+    def __init__(self, cost_functions=cout_blosum, gap_opening_function=11, gap_extending_function=1, clustering="NJ", cost_coefs=None):
+        if isinstance(cost_functions, list):
+            N = len(cost_functions)
+            if cost_coefs == None:
+                cost_coefs = [1./float(N)] * N
+            else:
+                assert len(cost_coefs) == N,  \
+                "{} coefs for cost functions are given, whereas {} cost functions are given".format(len(cost_coefs), N)
+            self.cost_coefs = cost_coefs
+        else:
+            self.cost_coefs = [1.]
+            cost_functions = [cost_functions]
+        self.costs = cost_functions
+        if isinstance(gap_opening_function, int):
+            gap_ = lambda x, y : gap_opening_function
+            self.gap = gap_
+        else:
+            self.gap = gap_opening_function
+        if isinstance(gap_extending_function, int):
+            extend_ = lambda x, y : gap_extending_function
+            self.extend = extend_
+        else:
+            self.extend = gap_extending_function
+        self.clustering = clustering
+        
+    def set_coefs(self, new_coefs):
+        self.cost_coefs = new_coefs
+        
+    def align(self, sequences1, sequences2):
+        ''' Aligns two groups of sequences already aligned among each group
+            sequences are list of dictionaries containing the sequence and sometimes descriptors '''
+        n = len(sequences1[0]["seq"])
+        m = len(sequences2[0]["seq"])
+        nb1 = len(sequences1)
+        nb2 = len(sequences2)
+        M = [[0 for j in range(m+1)] for i in range(n+1)]
+        Ix = [[0 for j in range(m+1)] for i in range(n+1)]
+        Iy = [[0 for j in range(m+1)] for i in range(n+1)]
+        tM = [[0 for j in range(m+1)] for i in range(n+1)]
+        tIx = [[0 for j in range(m+1)] for i in range(n+1)]
+        tIy = [[0 for j in range(m+1)] for i in range(n+1)]
+
+        M[1][0] = -sum([self.gap(sequences1[j], 0) for j in range(nb1)])*nb2
+        Ix[1][0] = M[1][0]
+        Iy[1][0] = M[1][0]
+        tM[1][0] = 1 #up
+        tIx[1][0] = 1 #up
+        tIy[1][0] = 1 #up    
+        for i in range(2, n+1):
+            M[i][0] = M[i-1][0] - sum([self.extend(sequences1[j],i-1) for j in range(nb1)])*nb2
+            Ix[i][0] = M[i][0]
+            Iy[i][0] = M[i][0]
+            tM[i][0] = 6 #up
+            tIx[i][0] = 6 #up
+            tIy[i][0] = 6 #up
+            
+        M[0][1] = -sum([self.gap(sequences2[j], 0) for j in range(nb2)])*nb1
+        Ix[0][1] = M[0][1]
+        Iy[0][1] = M[0][1]
+        tM[0][1] = 2 #left
+        tIx[0][1] = 2 #left
+        tIy[0][1] = 2 #left
+        for j in range(2, m+1):
+            M[0][j] = M[0][j-1] - sum([self.extend(sequences2[i], j-1) for i in range(nb2)])*nb1
+            Ix[0][j] = M[0][j]
+            Iy[0][j] = M[0][j]
+            tM[0][j] = 7 #left
+            tIx[0][j] = 7 #left
+            tIy[0][j] = 7 #left
+        
+        for i in range(1, n+1):
+            for j in range(1, m+1):
+                #M
+                m_ = M[i-1][j-1]
+                ix = Ix[i-1][j-1]
+                iy = Iy[i-1][j-1]
+            
+                for index1 in range (nb1):
+                    for index2 in range (nb2):
+                        cout_ab = sum([coef * cout(sequences1[index1], i-1, sequences2[index2], j-1) for (cout, coef) in zip(self.costs, self.cost_coefs)])
+                        m_ += cout_ab
+                        ix += cout_ab
+                        iy += cout_ab
+            
+                if ix > iy:
+                    if ix > m_:
+                        M[i][j] = ix
+                        tM[i][j] = 4 # dans Ix -1,-1
+                    else:
+                        M[i][j] = m_
+                        tM[i][j] = 3 #diag
+                else:
+                    if iy > m_:
+                        M[i][j] = iy
+                        tM[i][j] = 5 # dans Iy -1,-1
+                    else:
+                        M[i][j] = m_
+                        tM[i][j] = 3 #diag
+                #Ix
+                m_ = M[i-1][j] - sum([self.gap(sequences2[k], j-1) for k in range(nb2)])*nb1
+                ix = Ix[i-1][j] - sum([self.extend(sequences2[k], j-1) for k in range(nb2)])*nb1
+                if m_ > ix:
+                    Ix[i][j] = m_
+                    tIx[i][j] = 1
+                else:
+                    Ix[i][j] = ix
+                    tIx[i][j] = 6 # up dans Ix -1, 0
+                #Iy
+                m_ = M[i][j-1] - sum([self.gap(sequences1[k], i-1) for k in range(nb1)])*nb2
+                iy = Iy[i][j-1] - sum([self.extend(sequences1[k], i-1) for k in range(nb1)])*nb2
+                if m_ > iy:
+                    Iy[i][j] = m_
+                    tIy[i][j] = 2
+                else:
+                    Iy[i][j] = iy
+                    tIy[i][j] = 7 # left dans Iy 0, -1    
+    
+        # Now the traceback :
+        i = n
+        j = m
+        out = ""
+        pos = None
+        if Ix[i][j] > Iy[i][j]:
+            if Ix[i][j] > M[i][j]:
+                s = Ix[i][j]
+                pos = tIx
+            else:
+                s = M[i][j]
+                pos = tM
+        else:
+            if Iy[i][j] > M[i][j]:
+                s = Iy[i][j]
+                pos = tIy
+            else:
+                s = M[i][j]
+                pos = tM
+        while (i + j > 0):
+            if pos[i][j] == 1:
+                out = "1" + out
+                i -= 1
+                pos = tM
+            elif pos[i][j] == 2:
+                out = "2" + out
+                j -= 1
+                pos = tM
+            elif pos[i][j] == 3:
+                out = "*" + out
+                i -= 1
+                j -= 1
+                pos = tM
+            elif pos[i][j] == 4:
+                out = "*" + out
+                i -= 1
+                j -= 1
+                pos = tIx
+            elif pos[i][j] == 5:
+                out = "*" + out
+                i -= 1
+                j -= 1
+                pos = tIy
+            elif pos[i][j] == 6:
+                out = "1" + out
+                i -= 1
+                pos = tIx
+            else:
+                out = "2" + out
+                j -= 1
+                pos = tIy
+        return s, out
+    
+    @staticmethod
+    def affiche_multi(sequences1, sequences2, traceback):
+        L = len(traceback)
+        nb1 = len(sequences1)
+        nb2 = len(sequences2)
+        l1 = [""]*nb1
+        l2 = [""]*nb2
+        i, j = 0, 0
+        for k in range(L):
+            if traceback[k] == "1":
+                for index1 in range(nb1):
+                    l1[index1] = l1[index1] + sequences1[index1]["seq"][i]
+                i += 1
+                for index2 in range(nb2):
+                    l2[index2] = l2[index2] + "-"
+            elif traceback[k] == "2":
+                for index1 in range(nb1):
+                    l1[index1] = l1[index1] + "-"
+                for index2 in range(nb2):
+                    l2[index2] = l2[index2] + sequences2[index2]["seq"][j]
+                j += 1
+            else:
+                for index1 in range(nb1):
+                    l1[index1] = l1[index1] + sequences1[index1]["seq"][i]
+                i += 1
+                for index2 in range(nb2):
+                    l2[index2] = l2[index2] + sequences2[index2]["seq"][j]
+                j += 1
+        for index1 in range(nb1):
+            sequences1[index1]["seq"] = l1[index1]
+#            print(l1[index1])
+        for index2 in range(nb2):
+            sequences2[index2]["seq"] = l2[index2]
+#            print(l2[index2])
+#        print(" ")
+    
+    def tree_align(self, nom1, nom2, sequences, tree):
+            if not nom1 in tree.keys(): # si nom1 est une feuille
+                seq1 = [sequences[int(nom1)]]
+            else:
+                g1, g2 = tree[nom1][0], tree[nom1][1] 
+                seq1 = self.tree_align(g1, g2, sequences, tree)
+            if not nom2 in tree.keys():
+                seq2 = [sequences[int(nom2)]]
+            else:
+                g1, g2 = tree[nom2][0], tree[nom2][1] 
+                seq2 = self.tree_align(g1, g2, sequences, tree)
+            traceback = self.align(seq1,seq2)[1]
+            self.affiche_multi(seq1,seq2,traceback)  
+            return seq1 + seq2
+    
+    def run(self, sequences):
+        
+        N = len(sequences)
+        
+        # Computing the distance matrix between all sequences
+        cost_matrix = [[0 for i in range(N)] for j in range(N)]
+        for i in range(N): 
+            for j in range(i):
+                cost_matrix[i][j] = self.align([sequences[i]], [sequences[j]])[0]
+                cost_matrix[j][i] = cost_matrix[i][j]
+        table_dist = to_table (cost_matrix)
+        
+        #Clustering
+        if self.clustering == "NJ":
+            tree_NJ = neighbor_joining(table_dist)
+            edges = edges_tree(tree_NJ)
+            ed,res = find_root(tree_NJ,table_dist)
+            place_root(tree_NJ,ed,edges,table_dist,res)
+            print_tree(tree_NJ)
+            good_tree = reverse_tree(tree_NJ) # good_tree stocke la liste des fils de chaque noeud s'il n'est pas une feuille
+        elif self.clustering == "UPGMA":
+            tree_UPGMA = tree_upgma(table_dist)
+            print_tree(tree_UPGMA)
+            good_tree = reverse_tree(tree_UPGMA)
+        
+        g1, g2 = good_tree["root"][0], good_tree["root"][1] 
+        return self.tree_align(g1, g2, sequences, good_tree)
+
 ###################################################### I/ 2 Sequence alignment with linear Needleman-Wunsch ##################################
     
-def NW_affine(seq1, seq2, g, e, cout): 
+def NW_affine(seq1, seq2, g, e, cout="blosum"): 
     """ Linear Needleman-Wunsch """
     # cost is a function, g (gap opening cost) and e (gap pursuit cost) must be positive
     """ returns (score,alignment)"""
-    n = len(seq1)
-    m = len(seq2)
-    M = [[0 for i in range(m+1)] for j in range(n+1)]
-    Ix = [[0 for i in range(m+1)] for j in range(n+1)]
-    Iy = [[0 for i in range(m+1)] for j in range(n+1)]
-    tM = [[0 for i in range(m+1)] for j in range(n+1)]
-    tIx = [[0 for i in range(m+1)] for j in range(n+1)]
-    tIy = [[0 for i in range(m+1)] for j in range(n+1)]
-    
-    for i in range(1, n+1):
-        M[i][0] = -g+(1-i)*e
-        Ix[i][0] = -g+(1-i)*e
-        Iy[i][0] = -g+(1-i)*e
-        tM[i][0] = 1 #up
-        tIx[i][0] = 1 #up
-        tIy[i][0] = 1 #up
-    for j in range(1, m+1):
-        M[0][j] = -g+(1-j)*e
-        Ix[0][j] = -g+(1-j)*e
-        Iy[0][j] = -g+(1-j)*e
-        tM[0][j] = 2 #left
-        tIx[0][j] = 2 #left
-        tIy[0][j] = 2 #left
-        
-    for i in range(1, n+1):
-        for j in range(1, m+1):
-            #M
-            m_ = M[i-1][j-1] + cout(seq1[i-1], seq2[j-1])
-            ix = Ix[i-1][j-1] + cout(seq1[i-1], seq2[j-1])
-            iy = Iy[i-1][j-1] + cout(seq1[i-1], seq2[j-1])
-            if ix > iy:
-                if ix > m_:
-                    M[i][j] = ix
-                    tM[i][j] = 4 # dans Ix -1,-1
-                else:
-                    M[i][j] = m_
-                    tM[i][j] = 3 #diag
-            else:
-                if iy > m_:
-                    M[i][j] = iy
-                    tM[i][j] = 5 # dans Iy -1,-1
-                else:
-                    M[i][j] = m_
-                    tM[i][j] = 3 #diag
-            #Ix
-            m_ = M[i-1][j] - g
-            ix = Ix[i-1][j] - e
-            if m_ > ix:
-                Ix[i][j] = m_
-                tIx[i][j] = 1
-            else:
-                Ix[i][j] = ix
-                tIx[i][j] = 6 # up dans Ix -1, 0
-            #Iy
-            m_ = M[i][j-1] - g
-            iy = Iy[i][j-1] - e
-            if m_ > iy:
-                Iy[i][j] = m_
-                tIy[i][j] = 2
-            else:
-                Iy[i][j] = iy
-                tIy[i][j] = 7 # left dans Iy 0, -1    
-    
-    # Now the traceback :
-    i = n
-    j = m
-    out = ""
-    pos = None
-    if Ix[i][j] > Iy[i][j]:
-        if Ix[i][j] > M[i][j]:
-            s = Ix[i][j]
-            pos = tIx
-        else:
-            s = M[i][j]
-            pos = tM
+    if cout == "blosum":
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
     else:
-        if Iy[i][j] > M[i][j]:
-            s = Iy[i][j]
-            pos = tIy
-        else:
-            s = M[i][j]
-            pos = tM
-    while (i + j > 0):
-        if pos[i][j] == 1:
-            out = "1" + out
-            i -= 1
-            pos = tM
-        elif pos[i][j] == 2:
-            out = "2" + out
-            j -= 1
-            pos = tM
-        elif pos[i][j] == 3:
-            out = "-" + out
-            i -= 1
-            j -= 1
-            pos = tM
-        elif pos[i][j] == 4:
-            out = "-" + out
-            i -= 1
-            j -= 1
-            pos = tIx
-        elif pos[i][j] == 5:
-            out = "-" + out
-            i -= 1
-            j -= 1
-            pos = tIy
-        elif pos[i][j] == 6:
-            out = "1" + out
-            i -= 1
-            pos = tIx
-        else:
-            out = "2" + out
-            j -= 1
-            pos = tIy
-    return s, out
-
-def affiche(seq1, seq2, traceback):
-    """ print aligned sequences """
-    L = len(traceback)
-    l1 = ""
-    l2 = ""
-    i, j = 0, 0
-    for k in range(L):
-        if traceback[k] == "1":
-            l1 = l1 + seq1[i]
-            i += 1
-            l2 = l2 + "-"
-        elif traceback[k] == "2":
-            l1 = l1 + "-"
-            l2 = l2 + seq2[j]
-            j += 1
-        else:
-            l1 = l1 + seq1[i]
-            i += 1
-            l2 = l2 + seq2[j]
-            j += 1
-    print(l1)
-    print(l2)
+        cost_func = cout
+    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    sequence1 = [{"seq":seq1}]
+    sequence2 = [{"seq":seq2}]
+    sequences = NW.run(sequence1, sequence2)
+    print(sequences[0]["seq"])
+    print(sequences[1]["seq"])
+    return [sequences[0]["seq"], sequences[0]["seq"]]
 
 ###################################################################II/ N sequence alignment with complex linear Needleman-Wunsch ############################
-def NW_affine_multi(seq1, seq2, g, e, cout): # coût est une fonction, g et e doit être positif
-    n = len(seq1[0])
-    m = len(seq2[0])
-    nb1 = len(seq1)
-    nb2 = len(seq2)
-    M = [[0 for i in range(m+1)] for j in range(n+1)]
-    Ix = [[0 for i in range(m+1)] for j in range(n+1)]
-    Iy = [[0 for i in range(m+1)] for j in range(n+1)]
-    tM = [[0 for i in range(m+1)] for j in range(n+1)]
-    tIx = [[0 for i in range(m+1)] for j in range(n+1)]
-    tIy = [[0 for i in range(m+1)] for j in range(n+1)]
     
-    for i in range(1, n+1):
-        M[i][0] = -g+(1-i)*e
-        Ix[i][0] = -g+(1-i)*e
-        Iy[i][0] = -g+(1-i)*e
-        tM[i][0] = 1 #up
-        tIx[i][0] = 1 #up
-        tIy[i][0] = 1 #up
-    for j in range(1, m+1):
-        M[0][j] = -g+(1-j)*e
-        Ix[0][j] = -g+(1-j)*e
-        Iy[0][j] = -g+(1-j)*e
-        tM[0][j] = 2 #left
-        tIx[0][j] = 2 #left
-        tIy[0][j] = 2 #left
-        
-    for i in range(1, n+1):
-        for j in range(1, m+1):
-            #M
-            m_ = M[i-1][j-1]
-            ix = Ix[i-1][j-1]
-            iy = Iy[i-1][j-1]
-            
-            for index1 in range (nb1):
-                for index2 in range (nb2):
-                    m_ += cout(seq1[index1][i-1], seq2[index2][j-1])
-                    ix += cout(seq1[index1][i-1], seq2[index2][j-1])
-                    iy += cout(seq1[index1][i-1], seq2[index2][j-1])
-            
-            if ix > iy:
-                if ix > m_:
-                    M[i][j] = ix
-                    tM[i][j] = 4 # dans Ix -1,-1
-                else:
-                    M[i][j] = m_
-                    tM[i][j] = 3 #diag
-            else:
-                if iy > m_:
-                    M[i][j] = iy
-                    tM[i][j] = 5 # dans Iy -1,-1
-                else:
-                    M[i][j] = m_
-                    tM[i][j] = 3 #diag
-            #Ix
-            m_ = M[i-1][j] - g
-            ix = Ix[i-1][j] - e
-            if m_ > ix:
-                Ix[i][j] = m_
-                tIx[i][j] = 1
-            else:
-                Ix[i][j] = ix
-                tIx[i][j] = 6 # up dans Ix -1, 0
-            #Iy
-            m_ = M[i][j-1] - g
-            iy = Iy[i][j-1] - e
-            if m_ > iy:
-                Iy[i][j] = m_
-                tIy[i][j] = 2
-            else:
-                Iy[i][j] = iy
-                tIy[i][j] = 7 # left dans Iy 0, -1    
+def NW_affine_multi(seq1, seq2, g, e, cout="blosum"): # coût est une fonction, g et e doit être positif
     
-    # Now the traceback :
-    i = n
-    j = m
-    out = ""
-    pos = None
-    if Ix[i][j] > Iy[i][j]:
-        if Ix[i][j] > M[i][j]:
-            s = Ix[i][j]
-            pos = tIx
-        else:
-            s = M[i][j]
-            pos = tM
+    if cout == "blosum":
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
     else:
-        if Iy[i][j] > M[i][j]:
-            s = Iy[i][j]
-            pos = tIy
-        else:
-            s = M[i][j]
-            pos = tM
-    while (i + j > 0):
-        if pos[i][j] == 1:
-            out = "1" + out
-            i -= 1
-            pos = tM
-        elif pos[i][j] == 2:
-            out = "2" + out
-            j -= 1
-            pos = tM
-        elif pos[i][j] == 3:
-            out = "*" + out
-            i -= 1
-            j -= 1
-            pos = tM
-        elif pos[i][j] == 4:
-            out = "*" + out
-            i -= 1
-            j -= 1
-            pos = tIx
-        elif pos[i][j] == 5:
-            out = "*" + out
-            i -= 1
-            j -= 1
-            pos = tIy
-        elif pos[i][j] == 6:
-            out = "1" + out
-            i -= 1
-            pos = tIx
-        else:
-            out = "2" + out
-            j -= 1
-            pos = tIy
-    return s, out
-
-def affiche_multi(seq1, seq2, traceback):
-    L = len(traceback)
-    nb1 = len(seq1)
-    nb2 = len(seq2)
-    l1 = [""]*nb1
-    l2 = [""]*nb2
-    i, j = 0, 0
-    for k in range(L):
-        if traceback[k] == "1":
-            for index1 in range(nb1):
-                l1[index1] = l1[index1] + seq1[index1][i]
-            i += 1
-            for index2 in range(nb2):
-                l2[index2] = l2[index2] + "*"
-        elif traceback[k] == "2":
-            for index1 in range(nb1):
-                l1[index1] = l1[index1] + "*"
-            for index2 in range(nb2):
-                l2[index2] = l2[index2] + seq2[index2][j]
-            j += 1
-        else:
-            for index1 in range(nb1):
-                l1[index1] = l1[index1] + seq1[index1][i]
-            i += 1
-            for index2 in range(nb2):
-                l2[index2] = l2[index2] + seq2[index2][j]
-            j += 1
-    return l1,l2
+        cost_func = cout
+    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    sequence1 = [{"seq":seq} for seq in seq1]
+    sequence2 = [{"seq":seq} for seq in seq2]
+    sequences = NW.run(sequence1, sequence2)
+    for seq in sequences:
+        print(seq["seq"])
+    return [seq["seq"] for seq in sequences]
 
 ################################################################### III/ Scoring of alignment quality ###################################################
 
@@ -938,7 +978,8 @@ def bali_score(reffile,testfile):
       raise Exception('Different number of sequences in test (%d) and ref (%d) FASTA' % (len(testkeylist),len(refkeylist)))
     # verify that the keys are identical between test and ref
     if sorted(testkeylist) != sorted(refkeylist):
-      raise Exception('Different keys in test and ref FASTA')
+        print(testkeylist, refkeylist)
+        raise Exception('Different keys in test and ref FASTA')
     
     # Number of columns in test alignment
     ntestcols = len(testseq[testkeylist[0]])
@@ -1051,28 +1092,39 @@ def bali_score(reffile,testfile):
     
 ######################################### IV/ N sequence alignment with complex linear Needleman-Wunsch using structural information ###################
 
-from Bio.PDB import HSExposureCB
+from Bio.Seq import Seq
 
-def get_descriptors(file):
-    ''' Gets descriptors for each residue in the protein's structure, 
-        including the HSExposure and the coordinates of the alpha carbon '''
-    parser = MMCIFParser()
-    structure = parser.get_structure(file.split('.')[0],file)
-    vca = []
-    HSE = []
-    names = []
-    model = structure[0]
-    hse = HSExposureCB(model)
-    for chain in model:
-        for residue in chain:
-            names.append(residue.get_resname())
-            if residue.has_id('CA'):
-                vca.append(residue['CA'].get_vector())
-                hse_ = hse[(chain.id, residue.id)]
-                HSE.append((hse_[0], hse_[1]))
-            else:
-                vca.append(None)
-                HSE.append(None)
-    dic = {"name" : names, "hse" : HSE, "coord" : vca}
-    return dic
+def align_fasta(file):
+    rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
+    sequences = []
+    for r in rec:
+        seq = {"seq" : r.seq}
+        desc = get_descriptors("PDB/"+r.name[:4]+".cif")
+        seq["hse"] = desc["hse"]
+        values = decode_enf(r.name[:4])
+        seq["name"] = r.name
+        seq["enf"] = values
+        assert len(desc["hse"]) == len(values), "Pas bon r={} : {} vs {}".format(r.name[:4], len(desc), len(values))
+        sequences.append(seq)
+    g, e = 11, 2
+    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
+    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])       
+    sequences = NW.run(sequences)
+    for seq in sequences:
+        print(seq["seq"])
+    return sequences
+
+def save_to_fasta(sequences):
+    seqRec = []
+    for seq in sequences:
+        seqr = SeqIO.SeqRecord(Seq(seq["seq"]), id=seq["name"], name=seq["name"], description="", dbxrefs=[])
+        seqRec.append(seqr)
+    with open("save_alignment.fasta", "w") as output_handle:
+        SeqIO.write(seqRec, output_handle, "fasta")
+
+def align_score(file):
+    seq = align_fasta(file)
+    save_to_fasta(seq)
+    bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+    
                      
