@@ -191,14 +191,31 @@ def get_descriptors(file):
     HSE = []
     names = []
     model = structure[0]
-    hse = HSExposureCB(model)
+    good = False
+    i = 1
+    while not good and i <= len(structure):
+        try:
+            hse = HSExposureCB(model)
+            good = True
+        except:
+            if i == len(structure):
+                raise Exception("No model worked for HSE")
+            print("HSE model error")
+            model = structure[i]
+            i += 1
+            good = False
     for chain in model:
         for residue in chain:
             names.append(residue.get_resname())
             if residue.has_id('CA'):
-                vca.append(residue['CA'].get_vector())
-                hse_ = hse[(chain.id, residue.id)]
-                HSE.append((hse_[0], hse_[1]))
+                try:
+                    vca.append(residue['CA'].get_vector())
+                    hse_ = hse[(chain.id, residue.id)]
+                    HSE.append((hse_[0], hse_[1]))
+                except:
+                    print("HSE error")
+                    vca.append(None)
+                    HSE.append(None)
             else:
                 vca.append(None)
                 HSE.append(None)
@@ -213,7 +230,7 @@ import graphviz as gv
 def to_table(t):
     ''' Pour le rendre utilisable on transforme la matrice des distances 
     en une table à deux clés qui sont des String d'entiers (plus facilement manipulables par
-    l'algorithme Neighbor Joining.'''
+    l'algorithme Neighbor Joining).'''
     table = {}
     for i in range(len(t)):
         l = {}
@@ -221,6 +238,18 @@ def to_table(t):
             l[str(j)] = t[i][j]
         table[str(i)] = l
     return table
+
+def mini_t(table):
+    ''' Calcule le minimum de la table t dans Neighbor Joining et renvoie sa valeur '''
+    mini = None
+    for i in table:
+        for j in table[i]:
+            if mini == None:
+                mini = table[i][j]
+            else:
+                if mini > table[i][j]:
+                    mini = table[i][j]
+    return mini
 
 def mini(table):
     ''' Calcule le minimum de la table delta dans Neighbor Joining et renvoie le couple des indices correspondants '''
@@ -259,6 +288,12 @@ def neighbor_joining(t):
         delta[i] = [True, {}]
         # True veut dire que i est encore à traiter. lorsque i et j fusionnent, on a delta[i][0] = False
     
+    # On ramène toutes les valeurs en positif avant d'effectuer l'algorithme :
+    offset = mini_t(t)
+    if offset < 0:
+        for i in t:
+            for j in t[i]:
+                t[i][j] = t[i][j] - 2 * offset
     # On effectue la boucle n-2 afin de faire fusionner les taxons en deux arbres binaires
     for k in range(n, 2, -1):
         
@@ -606,19 +641,22 @@ def reverse_tree(tree):
     
 # Different cost functions that may be used in the NW algo
     
-def cout_blosum(seq1, i, seq2, j, g=lambda x : 11, e=lambda x : 1, mat=BLOSUM): #mat doit être la matrice BLOSUM
+from time import time
+from random import shuffle
+    
+def cout_blosum(seq1, i, seq2, j, g=lambda x, y : 11, e=lambda x, y : 1, mat=BLOSUM): #mat doit être la matrice BLOSUM
     a = seq1["seq"][i]
     b = seq2["seq"][j]
     if a == "-":
         if b == "-":
             return 0
         if j > 1 and seq2["seq"][j-1] == "-":
-            return -e(b)
-        return -g(b)
+            return -e(seq2, j)
+        return -g(seq2, j)
     if b == "-":
         if i > 1 and seq1["seq"][i-1] == "-":
-            return -e(a)
-        return -g(a)
+            return -e(seq1, i)
+        return -g(seq1, i)
     return mat[a][b]
     
 def cout_bidon(seq1, i, seq2, j):
@@ -639,6 +677,20 @@ def cout_hse(seq1, i, seq2, j):
         c = -(abs(seq1["hse"][i][0] - seq2["hse"][j][0]) + abs(seq1["hse"][i][1] - seq2["hse"][j][1]))
         return c
     return 0
+
+# Gap and extend functions taking the enf into account :
+
+def gap_profiled(seq1, i, g=11, p=0.5):
+    if "enf" in seq1:
+        return g * p + g * (1. - p) * seq1["enf"][i] /seq1["enf_max"]
+    else:
+        return g
+    
+def extend_profiled(seq1, i, e=1, p=0.5):
+    if "enf" in seq1:
+        return e * p + e * (1. - p) * seq1["enf"][i] /seq1["enf_max"]
+    else:
+        return e 
     
 class NeedlemanWunsch:
     ''' Class for Needleman-Wunsch algorithm
@@ -662,12 +714,12 @@ class NeedlemanWunsch:
             self.cost_coefs = [1.]
             cost_functions = [cost_functions]
         self.costs = cost_functions
-        if isinstance(gap_opening_function, int):
+        if isinstance(gap_opening_function, int) or isinstance(gap_opening_function, float):
             gap_ = lambda x, y : gap_opening_function
             self.gap = gap_
         else:
             self.gap = gap_opening_function
-        if isinstance(gap_extending_function, int):
+        if isinstance(gap_extending_function, int) or isinstance(gap_extending_function, float):
             extend_ = lambda x, y : gap_extending_function
             self.extend = extend_
         else:
@@ -676,6 +728,21 @@ class NeedlemanWunsch:
         
     def set_coefs(self, new_coefs):
         self.cost_coefs = new_coefs
+        
+    def set_ge(self, g, e):
+        if isinstance(g, int) or isinstance(g, float):
+            gap_ = lambda x, y : g
+            self.gap = gap_
+        else:
+            self.gap = g
+        if isinstance(e, int) or isinstance(e, float):
+            extend_ = lambda x, y : e
+            self.extend = extend_
+        else:
+            self.extend = e
+            
+    def set_costs(self, new_costs):
+        self.costs = new_costs
         
     def align(self, sequences1, sequences2):
         ''' Aligns two groups of sequences already aligned among each group
@@ -691,7 +758,7 @@ class NeedlemanWunsch:
         tIx = [[0 for j in range(m+1)] for i in range(n+1)]
         tIy = [[0 for j in range(m+1)] for i in range(n+1)]
 
-        M[1][0] = -sum([self.gap(sequences1[j], 0) for j in range(nb1)])*nb2
+        M[1][0] = -sum([self.gap(sequences1[j], 0) for j in range(nb1)]) * nb2
         Ix[1][0] = M[1][0]
         Iy[1][0] = M[1][0]
         tM[1][0] = 1 #up
@@ -705,7 +772,7 @@ class NeedlemanWunsch:
             tIx[i][0] = 6 #up
             tIy[i][0] = 6 #up
             
-        M[0][1] = -sum([self.gap(sequences2[j], 0) for j in range(nb2)])*nb1
+        M[0][1] = -sum([self.gap(sequences2[j], 0) for j in range(nb2)]) * nb1
         Ix[0][1] = M[0][1]
         Iy[0][1] = M[0][1]
         tM[0][1] = 2 #left
@@ -748,7 +815,7 @@ class NeedlemanWunsch:
                         M[i][j] = m_
                         tM[i][j] = 3 #diag
                 #Ix
-                m_ = M[i-1][j] - sum([self.gap(sequences2[k], j-1) for k in range(nb2)])*nb1
+                m_ = M[i-1][j] - sum([self.gap(sequences2[k], j-1) for k in range(nb2)]) * nb1
                 ix = Ix[i-1][j] - sum([self.extend(sequences2[k], j-1) for k in range(nb2)])*nb1
                 if m_ > ix:
                     Ix[i][j] = m_
@@ -757,7 +824,7 @@ class NeedlemanWunsch:
                     Ix[i][j] = ix
                     tIx[i][j] = 6 # up dans Ix -1, 0
                 #Iy
-                m_ = M[i][j-1] - sum([self.gap(sequences1[k], i-1) for k in range(nb1)])*nb2
+                m_ = M[i][j-1] - sum([self.gap(sequences1[k], i-1) for k in range(nb1)]) * nb2
                 iy = Iy[i][j-1] - sum([self.extend(sequences1[k], i-1) for k in range(nb1)])*nb2
                 if m_ > iy:
                     Iy[i][j] = m_
@@ -897,6 +964,68 @@ class NeedlemanWunsch:
         
         g1, g2 = good_tree["root"][0], good_tree["root"][1] 
         return self.tree_align(g1, g2, sequences, good_tree)
+    
+    def compute_score(self):
+        t = time()
+        files = os.listdir("balibase/RV11.unaligned/")
+        SP, TC = [], []
+        for file in files:        
+            print(" ")
+            rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
+            sequences = []
+            for r in rec:
+                seq = {"seq" : r.seq}
+                seq["name"] = r.name
+                if cout_hse in self.costs:
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif")
+                    seq["hse"] = desc["hse"]
+                if cout_enf in self.costs:
+                    values = decode_enf(r.name[:4])
+                    seq["enf"] = values
+                    seq["enf_max"] = max(values)
+                sequences.append(seq)
+            sequences = self.run(sequences)
+            save_to_fasta(sequences)
+            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+            SP.append(sp)
+            TC.append(tc)
+        print("TIME : {}".format(time()-t))
+        m_tc = np.mean(TC)
+        m_sp = np.mean(SP)
+        print("TC = {}\nSP = {}".format(m_tc, m_sp))
+        return m_sp, m_tc
+    
+    def quick_score(self):
+        t = time()
+        files = os.listdir("balibase/RV11.unaligned/")
+        SP, TC = [], []
+        shuffle(files)
+        for file in files:
+            if time() - t > 300:
+                break
+            print(" ")
+            rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
+            sequences = []
+            for r in rec:
+                seq = {"seq" : r.seq}
+                seq["name"] = r.name
+                if cout_hse in self.costs:
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif")
+                    seq["hse"] = desc["hse"]
+                if cout_enf in self.costs:
+                    values = decode_enf(r.name[:4])
+                    seq["enf"] = values
+                    seq["enf_max"] = max(values)
+                sequences.append(seq)
+            sequences = self.run(sequences)
+            save_to_fasta(sequences)
+            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+            SP.append(sp)
+            TC.append(tc)
+        m_tc = np.mean(TC)
+        m_sp = np.mean(SP)
+        print("TC = {}\nSP = {}".format(m_tc, m_sp))
+        return m_sp, m_tc
 
 ###################################################### I/ 2 Sequence alignment with linear Needleman-Wunsch ##################################
     
@@ -905,7 +1034,7 @@ def NW_affine(seq1, seq2, g, e, cout="blosum"):
     # cost is a function, g (gap opening cost) and e (gap pursuit cost) must be positive
     """ returns (score,alignment)"""
     if cout == "blosum":
-        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
     else:
         cost_func = cout
     NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
@@ -921,7 +1050,7 @@ def NW_affine(seq1, seq2, g, e, cout="blosum"):
 def NW_affine_multi(seq1, seq2, g, e, cout="blosum"): # coût est une fonction, g et e doit être positif
     
     if cout == "blosum":
-        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
     else:
         cost_func = cout
     NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
@@ -1094,7 +1223,7 @@ def bali_score(reffile,testfile):
 
 from Bio.Seq import Seq
 
-def align_fasta(file):
+def align_fasta(file, algo="NW_blosum"):
     rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
     sequences = []
     for r in rec:
@@ -1107,8 +1236,14 @@ def align_fasta(file):
         assert len(desc["hse"]) == len(values), "Pas bon r={} : {} vs {}".format(r.name[:4], len(desc), len(values))
         sequences.append(seq)
     g, e = 11, 2
-    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x : g, e=lambda x : e)
-    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])       
+    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
+    if algo == "NW_blosum":
+        NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
+    elif algo == "NW_structural":
+        
+        ############# TODO ##################
+        NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
+        
     sequences = NW.run(sequences)
     for seq in sequences:
         print(seq["seq"])
@@ -1127,4 +1262,94 @@ def align_score(file):
     save_to_fasta(seq)
     bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
     
+##################################### V/ Optimization of cost coefficients ##########################################
+    
+from bayes_opt import BayesianOptimization
+
+def optimize_unstructural(opt="quick"):
+    ''' Optimization of gap and extend parameters in unstructural version '''
+    pbounds = {'g': (0, 25), 'e': (0, 1)}
+    g, e = 11, 1
+    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
+    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    def compute(g, e):
+        NW.set_ge(g, g*e)
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : g*e)
+        NW.set_costs([cost_func])
+        if opt=="all":
+            sp, tc = NW.compute_score()
+        if opt=="quick":
+            sp, tc = NW.quick_score()
+        else:
+            raise Exception("Not valid option")
+        return sp
+    optimizer = BayesianOptimization(
+            f=compute,
+            pbounds=pbounds,
+            random_state=1,
+            )
+    optimizer.probe(params={"g":11, "e":0.1}, lazy=True)
+    optimizer.probe(params={"g":15, "e":15/6}, lazy=True)
+    optimizer.maximize(init_points=2, n_iter=20)
+    return optimizer
+    
+def optimize_struct(opt="quick"):
+    ''' Optimization of balance between cost functions in the structural case '''
+    pbounds = {'x': (0, 1), 'y': (0, 1)}
+    g, e = 11, 1
+    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
+    costs = [cost_func, cout_hse, cout_enf]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.4, 0.2])
+#   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
+    def compute(x, y):
+        NW.set_coefs([x, (1-x) * y, (1-x) * (1-y)])
+        if opt=="all":
+            sp, tc = NW.compute_score()
+        if opt=="quick":
+            sp, tc = NW.quick_score()
+        else:
+            raise Exception("Not valid option")
+        return sp
+    optimizer = BayesianOptimization(
+            f=compute,
+            pbounds=pbounds,
+            random_state=1,
+            )
+    optimizer.probe(params={"x":0.8, "y":0.5}, lazy=True)
+    optimizer.maximize(init_points=3, n_iter=20)
+    return optimizer
+
+def optimize_gap(opt="quick"):
+    ''' Optimization of the enf penalty for gaps '''
+    pbounds = {'p' : (0, 1)}
+    p = 0.5
+    g_opt=11
+    e_opt=1
+    g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
+    e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
+    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=g, e=e)
+    costs = [cost_func]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+#   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
+    def compute(p):
+        g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
+        e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
+        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=g, e=e)
+        NW.set_costs([cost_func])
+        if opt=="all":
+            sp, tc = NW.compute_score()
+        if opt=="quick":
+            sp, tc = NW.quick_score()
+        else:
+            raise Exception("Not valid option")
+        return sp
+    optimizer = BayesianOptimization(
+            f=compute,
+            pbounds=pbounds,
+            random_state=1,
+            )
+    optimizer.maximize(init_points=2, n_iter=20)
+    return optimizer
+
+         
                      
