@@ -158,7 +158,7 @@ def get_enf():
                     f.write(str(i)+","+str(enf[chain][i])+"\n")
         f.close()
         
-def decode_enf(file_id):
+def decode_enf(file_id, chain=None):
     ''' Gets all the values of the residue's depth 
         Returns the list of "enf" values in the sequential order '''
     file = open("enfouissements.txt", "r")
@@ -166,6 +166,9 @@ def decode_enf(file_id):
     lines = content.split("\n")[:-1]
     N = len(lines)
     good_file = False
+    if chain == None:
+        chain="A"
+    good_chain=False
     next_file = False
     values = []
     for k in range(N):
@@ -177,14 +180,21 @@ def decode_enf(file_id):
             next_file = False
         elif lines[k] == "new_file ":
             next_file = True
-        elif not "hain" in lines[k] and good_file:
+        elif "Chain" in lines[k]:
+            id_ = lines[k].split("id=")[1].split(">")[0]
+            good_chain = (id_ == chain)          
+        elif not "hain" in lines[k] and good_file and good_chain:
             tokens = lines[k].split(",")
             values.append(float(tokens[1]))
     return values
 
-def get_descriptors(file):
+AA3to1 = {"ALA":"A", "ARG":"R", "ASP":"D", "ASN":"N", "CYS":"C", "GLU":"E", "GLN":"Q", "GLY":"G", "HIS":"H", "ILE":"I",
+          "LEU":"L", "LYS":"K", "MET":"M", "PHE":"F", "PRO":"P", "SER":"S", "THR":"T", "TRP":"W", "TYR":"Y", "VAL":"V"}
+
+def get_descriptors(file, seq, chain=None):
     ''' Gets descriptors for each residue in the protein's structure, 
         including the HSExposure and the coordinates of the alpha carbon '''
+    print(file)
     parser = MMCIFParser()
     structure = parser.get_structure(file.split('.')[0],file)
     vca = []
@@ -192,6 +202,8 @@ def get_descriptors(file):
     names = []
     model = structure[0]
     good = False
+    if chain == None:
+        chain="A"
     i = 1
     while not good and i <= len(structure):
         try:
@@ -204,22 +216,31 @@ def get_descriptors(file):
             model = structure[i]
             i += 1
             good = False
-    for chain in model:
-        for residue in chain:
-            names.append(residue.get_resname())
-            if residue.has_id('CA'):
-                try:
+    for chain_ in model:
+        if chain==chain_.id:           
+            for residue in chain_:
+                if residue.get_resname() in AA3to1:
+                    nem = AA3to1[residue.get_resname()]
+                else:
+                    nem = "X"
+                names.append(nem)
+                if residue.has_id('CA'):
                     vca.append(residue['CA'].get_vector())
-                    hse_ = hse[(chain.id, residue.id)]
-                    HSE.append((hse_[0], hse_[1]))
-                except:
-                    print("HSE error")
+                else:
                     vca.append(None)
-                    HSE.append(None)
-            else:
-                vca.append(None)
                 HSE.append(None)
-    dic = {"name" : names, "hse" : HSE, "coord" : vca}
+    for residue in hse:
+        hse_ = residue[1]
+        if residue[0].get_full_id()[2] == chain and residue[0].get_full_id()[3][1] <= len(HSE):
+            HSE[residue[0].get_full_id()[3][1] - 1] = (hse_[0], hse_[1])
+    s = ""
+    for c in names:
+        s = s + c
+    pos = s.find(str(seq))
+    assert pos > -1, "No compatibility between PDB and fasta sequence for {}".format(file)
+    N = len(seq)
+    dic = {"name" : names[pos:pos+N], "hse" : HSE[pos:pos+N], "coord" : vca[pos:pos+N]}
+    print("HSE errors : {} out of {}".format(HSE[pos:pos+N].count(None), N))
     return dic
 
 ############################################################## D/ Clustering functions ######################################################"
@@ -644,19 +665,9 @@ def reverse_tree(tree):
 from time import time
 from random import shuffle
     
-def cout_blosum(seq1, i, seq2, j, g=lambda x, y : 11, e=lambda x, y : 1, mat=BLOSUM): #mat doit être la matrice BLOSUM
+def cout_blosum(seq1, i, seq2, j, mat=BLOSUM): #mat doit être la matrice BLOSUM
     a = seq1["seq"][i]
     b = seq2["seq"][j]
-    if a == "-":
-        if b == "-":
-            return 0
-        if j > 1 and seq2["seq"][j-1] == "-":
-            return -e(seq2, j)
-        return -g(seq2, j)
-    if b == "-":
-        if i > 1 and seq1["seq"][i-1] == "-":
-            return -e(seq1, i)
-        return -g(seq1, i)
     return mat[a][b]
     
 def cout_bidon(seq1, i, seq2, j):
@@ -702,6 +713,16 @@ class NeedlemanWunsch:
     '''
     
     def __init__(self, cost_functions=cout_blosum, gap_opening_function=11, gap_extending_function=1, clustering="NJ", cost_coefs=None):
+        if isinstance(gap_opening_function, int) or isinstance(gap_opening_function, float):
+            gap_ = lambda x, y : gap_opening_function
+            self.gap = gap_
+        else:
+            self.gap = gap_opening_function
+        if isinstance(gap_extending_function, int) or isinstance(gap_extending_function, float):
+            extend_ = lambda x, y : gap_extending_function
+            self.extend = extend_
+        else:
+            self.extend = gap_extending_function
         if isinstance(cost_functions, list):
             N = len(cost_functions)
             if cost_coefs == None:
@@ -713,18 +734,28 @@ class NeedlemanWunsch:
         else:
             self.cost_coefs = [1.]
             cost_functions = [cost_functions]
-        self.costs = cost_functions
-        if isinstance(gap_opening_function, int) or isinstance(gap_opening_function, float):
-            gap_ = lambda x, y : gap_opening_function
-            self.gap = gap_
-        else:
-            self.gap = gap_opening_function
-        if isinstance(gap_extending_function, int) or isinstance(gap_extending_function, float):
-            extend_ = lambda x, y : gap_extending_function
-            self.extend = extend_
-        else:
-            self.extend = gap_extending_function
+        self.hidden_costs = cost_functions
+        self.costs = [self.wrap(cost_func) for cost_func in cost_functions]
         self.clustering = clustering
+        
+    def wrap(self, function):
+        e = self.extend
+        g = self.gap
+        def f(seq1, i, seq2, j):
+            a = seq1["seq"][i]
+            b = seq2["seq"][j]
+            if a == "-":
+                if b == "-":
+                    return 0
+                if j > 1 and seq2["seq"][j-1] == "-":
+                    return -e(seq2, j)
+                return -g(seq2, j)
+            if b == "-":
+                if i > 1 and seq1["seq"][i-1] == "-":
+                    return -e(seq1, i)
+                return -g(seq1, i)
+            return function(seq1, i, seq2, j)
+        return f
         
     def set_coefs(self, new_coefs):
         self.cost_coefs = new_coefs
@@ -740,9 +771,10 @@ class NeedlemanWunsch:
             self.extend = extend_
         else:
             self.extend = e
+        self.costs = [self.wrap(cost_func) for cost_func in self.hidden_costs]
             
     def set_costs(self, new_costs):
-        self.costs = new_costs
+        self.costs = [self.wrap(cost_func) for cost_func in new_costs]
         
     def align(self, sequences1, sequences2):
         ''' Aligns two groups of sequences already aligned among each group
@@ -893,32 +925,56 @@ class NeedlemanWunsch:
         nb2 = len(sequences2)
         l1 = [""]*nb1
         l2 = [""]*nb2
+        mod = list(sequences1[0].keys())
+        mod.remove("seq")
+        mod.remove("name")
+        desc1 = {}
+        desc2 = {}
+        for key in mod:
+            desc1[key] = [[]]*nb1
+            desc2[key] = [[]]*nb2
         i, j = 0, 0
         for k in range(L):
             if traceback[k] == "1":
                 for index1 in range(nb1):
                     l1[index1] = l1[index1] + sequences1[index1]["seq"][i]
+                    for key in desc1:
+                        desc1[key][index1].append(sequences1[index1][key][i])
                 i += 1
                 for index2 in range(nb2):
                     l2[index2] = l2[index2] + "-"
+                    for key in desc2:
+                        desc2[key][index2].append(None)
             elif traceback[k] == "2":
                 for index1 in range(nb1):
                     l1[index1] = l1[index1] + "-"
+                    for key in desc1:
+                        desc1[key][index1].append(None)
                 for index2 in range(nb2):
                     l2[index2] = l2[index2] + sequences2[index2]["seq"][j]
+                    for key in desc2:
+                        desc2[key][index2].append(sequences2[index2][key][j])
                 j += 1
             else:
                 for index1 in range(nb1):
                     l1[index1] = l1[index1] + sequences1[index1]["seq"][i]
+                    for key in desc1:
+                        desc1[key][index1].append(sequences1[index1][key][i])
                 i += 1
                 for index2 in range(nb2):
                     l2[index2] = l2[index2] + sequences2[index2]["seq"][j]
+                    for key in desc2:
+                        desc2[key][index2].append(sequences2[index2][key][j])
                 j += 1
         for index1 in range(nb1):
             sequences1[index1]["seq"] = l1[index1]
+            for key in desc2:
+                sequences1[index1][key] = desc1[key][index1]
 #            print(l1[index1])
         for index2 in range(nb2):
             sequences2[index2]["seq"] = l2[index2]
+            for key in desc2:
+                sequences2[index2][key] = desc2[key][index2]
 #            print(l2[index2])
 #        print(" ")
     
@@ -955,11 +1011,11 @@ class NeedlemanWunsch:
             edges = edges_tree(tree_NJ)
             ed,res = find_root(tree_NJ,table_dist)
             place_root(tree_NJ,ed,edges,table_dist,res)
-            print_tree(tree_NJ)
+#            print_tree(tree_NJ)
             good_tree = reverse_tree(tree_NJ) # good_tree stocke la liste des fils de chaque noeud s'il n'est pas une feuille
         elif self.clustering == "UPGMA":
             tree_UPGMA = tree_upgma(table_dist)
-            print_tree(tree_UPGMA)
+#            print_tree(tree_UPGMA)
             good_tree = reverse_tree(tree_UPGMA)
         
         g1, g2 = good_tree["root"][0], good_tree["root"][1] 
@@ -976,11 +1032,14 @@ class NeedlemanWunsch:
             for r in rec:
                 seq = {"seq" : r.seq}
                 seq["name"] = r.name
+                chain = r.name.split("_")[1]
+                if chain=="":
+                    chain=None
                 if cout_hse in self.costs:
-                    desc = get_descriptors("PDB/"+r.name[:4]+".cif")
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", chain=chain)
                     seq["hse"] = desc["hse"]
                 if cout_enf in self.costs:
-                    values = decode_enf(r.name[:4])
+                    values = decode_enf(r.name[:4], chain=chain)
                     seq["enf"] = values
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
@@ -1009,11 +1068,14 @@ class NeedlemanWunsch:
             for r in rec:
                 seq = {"seq" : r.seq}
                 seq["name"] = r.name
+                chain = r.name.split("_")[1]
+                if chain=="":
+                    chain=None
                 if cout_hse in self.costs:
-                    desc = get_descriptors("PDB/"+r.name[:4]+".cif")
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
                     seq["hse"] = desc["hse"]
                 if cout_enf in self.costs:
-                    values = decode_enf(r.name[:4])
+                    values = decode_enf(r.name[:4], chain=chain)
                     seq["enf"] = values
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
@@ -1300,35 +1362,34 @@ def optimize_unstructural(opt="quick"):
     ''' Optimization of gap and extend parameters in unstructural version '''
     pbounds = {'g': (0, 25), 'e': (0, 1)}
     g, e = 11, 1
-    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
-    NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
-    def compute(g, e):
-        NW.set_ge(g, g*e)
-        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : g*e)
-        NW.set_costs([cost_func])
-        if opt=="all":
+    NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    if opt=="all":
+        def compute(g, e):
+            NW.set_ge(g, g*e)
             sp, tc = NW.compute_score()
-        if opt=="quick":
+            return sp
+    elif opt=="quick":
+        def compute(g, e):
+            NW.set_ge(g, g*e)
             sp, tc = NW.quick_score()
-        else:
-            raise Exception("Not valid option")
-        return sp
+            return sp
+    else:
+        raise Exception("Not valid option")
     optimizer = BayesianOptimization(
             f=compute,
             pbounds=pbounds,
-            random_state=1,
+            random_state=42,
             )
     optimizer.probe(params={"g":11, "e":0.1}, lazy=True)
-    optimizer.probe(params={"g":15, "e":15/6}, lazy=True)
-    optimizer.maximize(init_points=2, n_iter=20)
+    optimizer.probe(params={"g":15, "e":6/15}, lazy=True)
+    optimizer.maximize(init_points=4, n_iter=30)
     return optimizer
     
 def optimize_struct(opt="quick"):
     ''' Optimization of balance between cost functions in the structural case '''
     pbounds = {'x': (0, 1), 'y': (0, 1)}
     g, e = 11, 1
-    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
-    costs = [cost_func, cout_hse, cout_enf]
+    costs = [cout_blosum, cout_hse, cout_enf]
     NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.4, 0.2])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
     def compute(x, y):
@@ -1346,7 +1407,7 @@ def optimize_struct(opt="quick"):
             random_state=1,
             )
     optimizer.probe(params={"x":0.8, "y":0.5}, lazy=True)
-    optimizer.maximize(init_points=3, n_iter=20)
+    optimizer.maximize(init_points=4, n_iter=50)
     return optimizer
 
 def optimize_gap(opt="quick"):
@@ -1357,15 +1418,13 @@ def optimize_gap(opt="quick"):
     e_opt=1
     g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
     e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
-    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=g, e=e)
-    costs = [cost_func]
+    costs = [cout_blosum]
     NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
     def compute(p):
         g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
         e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
-        cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=g, e=e)
-        NW.set_costs([cost_func])
+        NW.set_ge(g, e)
         if opt=="all":
             sp, tc = NW.compute_score()
         if opt=="quick":
@@ -1381,5 +1440,34 @@ def optimize_gap(opt="quick"):
     optimizer.maximize(init_points=2, n_iter=20)
     return optimizer
 
-         
+def grid_search(opt="quick"):
+    g, e = 11, 1
+    NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    if opt=="all":
+        def compute(g, e):
+            NW.set_ge(g, e)
+            sp, tc = NW.compute_score()
+            return sp, tc
+    elif opt=="quick":
+        def compute(g, e):
+            NW.set_ge(g, e)
+            sp, tc = NW.quick_score()
+            return sp, tc
+    else:
+        raise Exception("Not valid option")
+    res={}
+    for (g,e) in [(8, 1), (10, 1), (10, 2), (10, 4), (11, 3), (12, 2), (13, 2), (13, 6), (14, 4), (15, 6)]:
+        res[(g, e)] = compute(g, e)
+    return res
+
+#res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
+# (10, 1): (0.41608800440831978, 0.25394736842105264),
+# (10, 2): (0.50433622944747858, 0.27894736842105256),
+# (10, 4): (0.48388987506593545, 0.25868421052631579),
+# (11, 3): (0.49784464522354061, 0.26973684210526311),
+# (12, 2): (0.50407271589054847, 0.28026315789473683),
+# (13, 2): (0.49753416550527296, 0.29026315789473683),
+# (13, 6): (0.46949131392905497, 0.255),
+# (14, 4): (0.50545745015904853, 0.28078947368421053),
+# (15, 6): (0.47925907268134837, 0.26236842105263153)}         
                      
