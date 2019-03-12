@@ -1129,7 +1129,6 @@ def NW_affine_multi(seq1, seq2, g, e, cout="blosum"): # coût est une fonction, 
 from Bio.Align.Applications import ClustalwCommandline   
 from Bio import AlignIO
 import Bio.SeqIO
-import os
 import subprocess
 import sys
 
@@ -1155,7 +1154,7 @@ def score_align(reffile):
     bali_score("balibase/RV11.aligned/BBS11001.fasta", reffile_name+".aln_aligned.fasta")"""
         
     
-score_align("balibase/RV11.unaligned/BBS11001")  
+#score_align("balibase/RV11.unaligned/BBS11001")  
 
 def bali_score(reffile,testfile):
 
@@ -1320,24 +1319,29 @@ from Bio.Seq import Seq
 def align_fasta(file, algo="NW_blosum"):
     rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
     sequences = []
-    for r in rec:
-        seq = {"seq" : r.seq}
-        desc = get_descriptors("PDB/"+r.name[:4]+".cif")
-        seq["hse"] = desc["hse"]
-        values = decode_enf(r.name[:4])
-        seq["name"] = r.name
-        seq["enf"] = values
-        assert len(desc["hse"]) == len(values), "Pas bon r={} : {} vs {}".format(r.name[:4], len(desc), len(values))
-        sequences.append(seq)
     g, e = 11, 2
-    cost_func = lambda sequ1, i, sequ2, j : cout_blosum(sequ1, i, sequ2, j, g=lambda x, y : g, e=lambda x, y : e)
     if algo == "NW_blosum":
-        NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
+        NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
     elif algo == "NW_structural":
         
         ############# TODO ##################
-        NW = NeedlemanWunsch(cost_functions=cost_func, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
-        
+        NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
+    for r in rec:
+        seq = {"seq" : r.seq}
+        seq["name"] = r.name
+        chain=None
+        if "_" in r.name:
+            chain = r.name.split("_")
+            if chain=="":
+                chain=None
+        if cout_hse in NW.costs:
+            desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
+            seq["hse"] = desc["hse"]
+        if cout_enf in NW.costs:
+            values = decode_enf(r.name[:4], chain=chain)
+            seq["enf"] = values
+            seq["enf_max"] = max(values)
+            sequences.append(seq)
     sequences = NW.run(sequences)
     for seq in sequences:
         print(seq["seq"])
