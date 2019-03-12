@@ -1062,6 +1062,36 @@ def NW_affine_multi(seq1, seq2, g, e, cout="blosum"): # coût est une fonction, 
     return [seq["seq"] for seq in sequences]
 
 ################################################################### III/ Scoring of alignment quality ###################################################
+from Bio.Align.Applications import ClustalwCommandline   
+from Bio import AlignIO
+import Bio.SeqIO
+import os
+import subprocess
+import sys
+
+def conversionAlignFASTA(fichier):
+	alignment = AlignIO.read(fichier,"clustal")
+	file = open(fichier+"_aligned.fasta","w")
+	Bio.SeqIO.write(alignment,file,"fasta")
+	file.close()
+
+def score_align(reffile):
+    clustalw_exe = r"C:\Users\josep\Anaconda3\Lib\site-packages\Bio\Align\Applications\_Clustalw.py"
+    assert os.path.isfile(clustalw_exe), "Clustal W executable missing"
+    cline=ClustalwCommandline(clustalw_exe, infile=reffile+".fasta", type="PROTEIN", output="FASTA", outfile=reffile+"_aligned.fasta", quiet=True)
+    #child = subprocess.call(str(clustalw_exe)+" -align -infile="+reffile_name+".fasta -seqnos ON -output fasta_aln -type protein", shell=True)
+    print(cline())
+    """
+    #subprocess.check_call(args, *, stdin=None, stdout=None, stderr=None, shell=False)
+    #clustalw_cline() 
+    align = AlignIO.read(reffile_name+".aln", "clustal")
+    print(align)
+    conversionAlignFASTA(reffile_name+".aln")
+    #Alignseq = align_fasta("BBS11001.fasta")
+    bali_score("balibase/RV11.aligned/BBS11001.fasta", reffile_name+".aln_aligned.fasta")"""
+        
+    
+score_align("balibase/RV11.unaligned/BBS11001")  
 
 def bali_score(reffile,testfile):
 
