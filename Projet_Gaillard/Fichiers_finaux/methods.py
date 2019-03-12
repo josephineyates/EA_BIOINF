@@ -1314,7 +1314,7 @@ def bali_score(reffile,testfile):
 
 from Bio.Seq import Seq
 
-def align_fasta(file, algo="NW_blosum"):
+def align_fasta(file, algo="NW_blosum",silent=True):
     rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
     sequences = []
     g, e = 11, 2
@@ -1339,24 +1339,25 @@ def align_fasta(file, algo="NW_blosum"):
             values = decode_enf(r.name[:4], chain=chain)
             seq["enf"] = values
             seq["enf_max"] = max(values)
-            sequences.append(seq)
+        sequences.append(seq)
     sequences = NW.run(sequences)
-    for seq in sequences:
-        print(seq["seq"])
+    if not(silent):
+        for seq in sequences:
+            print(seq["seq"])
     return sequences
 
-def save_to_fasta(sequences):
+def save_to_fasta(sequences,outputfile):
     seqRec = []
     for seq in sequences:
         seqr = SeqIO.SeqRecord(Seq(seq["seq"]), id=seq["name"], name=seq["name"], description="", dbxrefs=[])
         seqRec.append(seqr)
-    with open("save_alignment.fasta", "w") as output_handle:
+    with open(outputfile+".fasta", "w") as output_handle:
         SeqIO.write(seqRec, output_handle, "fasta")
 
 def align_score(file):
     seq = align_fasta(file)
-    save_to_fasta(seq)
-    bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+    save_to_fasta(seq,file+"_aligned.fasta")
+    return bali_score("balibase/RV11.aligned/{}".format(file), file+"_aligned.fasta")
     
 ##################################### V/ Optimization of cost coefficients ##########################################
     
@@ -1491,17 +1492,26 @@ def grid_search(opt="quick"):
     return res
 
 def eval_clustalw():
-    sp, tc = 0, 0
+    sp,tc = {"clustal":[],"align":[]},{"clustal":[],"align":[]}
     files = os.listdir("balibase/RV11.unaligned/")
     for file in files:
-        sp_, tc_ = bali_score("balibase/RV11.aligned/{}".format(file), "balibase/ClustalW/{}".format(file))
-        sp += sp_
-        tc += tc_
-    sp /= len(files)
-    tc /= len(files)
-    print("\nMean score :")
-    print("TC = {}".format(tc))
-    print("SP = {}".format(sp))
+        sp_, tc_ = align_score(file)
+        sp_clus, tc_clus = bali_score("balibase/RV11.aligned/{}".format(file), "balibase/ClustalW/{}".format(file))
+        sp["clustal"].append(sp_clus)
+        sp["align"].append(sp_)
+        tc["clustal"].append(tc_clus)
+        tc["align"].append(tc_)
+    mean_sp_clus = np.sum(sp["clustal"])/len(files)
+    mean_tc_clus = np.sum(tc["clustal"])/len(files)
+    mean_sp = np.sum(sp["align"])/len(files)
+    mean_tc = np.sum(tc["align"])/len(files)
+    print("\nMean score clustal:")
+    print("TC = {}".format(mean_tc_clus))
+    print("SP = {}".format(mean_sp_clus))
+    
+    print("\nMean score alignment:")
+    print("TC = {}".format(mean_tc))
+    print("SP = {}".format(mean_sp))
 
 eval_clustalw()
 #res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
