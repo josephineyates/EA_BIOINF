@@ -1068,9 +1068,11 @@ class NeedlemanWunsch:
             for r in rec:
                 seq = {"seq" : r.seq}
                 seq["name"] = r.name
-                chain = r.name.split("_")[1]
-                if chain=="":
-                    chain=None
+                chain=None
+                if "_" in r.name:
+                    chain = r.name.split("_")
+                    if chain=="":
+                        chain=None
                 if cout_hse in self.costs:
                     desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
                     seq["hse"] = desc["hse"]
@@ -1355,15 +1357,15 @@ def optimize_unstructural(opt="quick"):
     optimizer.maximize(init_points=4, n_iter=30)
     return optimizer
     
-def optimize_struct(opt="quick"):
+def optimize_hse(opt="quick"):
     ''' Optimization of balance between cost functions in the structural case '''
-    pbounds = {'x': (0, 1), 'y': (0, 1)}
-    g, e = 11, 1
-    costs = [cout_blosum, cout_hse, cout_enf]
-    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.4, 0.2])
+    pbounds = {'x': (0, 1)}
+    g, e = 11, 2
+    costs = [cout_blosum, cout_hse]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.6])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
-    def compute(x, y):
-        NW.set_coefs([x, (1-x) * y, (1-x) * (1-y)])
+    def compute(x):
+        NW.set_coefs([x, (1-x)])
         if opt=="all":
             sp, tc = NW.compute_score()
         if opt=="quick":
@@ -1376,8 +1378,34 @@ def optimize_struct(opt="quick"):
             pbounds=pbounds,
             random_state=1,
             )
-    optimizer.probe(params={"x":0.8, "y":0.5}, lazy=True)
-    optimizer.maximize(init_points=4, n_iter=50)
+    optimizer.probe(params={"x":0.8}, lazy=True)
+    optimizer.maximize(init_points=2, n_iter=10)
+    return optimizer
+
+def optimize_enf(opt="quick"):
+    ''' Optimization of balance between cost functions in the structural case '''
+    pbounds = {'x': (0, 1)}
+    g, e = 11, 2
+    alpha = 0.5
+    costs = [cout_blosum, cout_hse, cout_enf]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.4, 0.2])
+#   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
+    def compute(x):
+        NW.set_coefs([alpha * x, (1-alpha) * x, (1-x)])
+        if opt=="all":
+            sp, tc = NW.compute_score()
+        if opt=="quick":
+            sp, tc = NW.quick_score()
+        else:
+            raise Exception("Not valid option")
+        return sp
+    optimizer = BayesianOptimization(
+            f=compute,
+            pbounds=pbounds,
+            random_state=1,
+            )
+    optimizer.probe(params={"x":0.8}, lazy=True)
+    optimizer.maximize(init_points=2, n_iter=10)
     return optimizer
 
 def optimize_gap(opt="quick"):
@@ -1429,6 +1457,19 @@ def grid_search(opt="quick"):
     for (g,e) in [(8, 1), (10, 1), (10, 2), (10, 4), (11, 3), (12, 2), (13, 2), (13, 6), (14, 4), (15, 6)]:
         res[(g, e)] = compute(g, e)
     return res
+
+def eval_clustalw():
+    sp, tc = 0, 0
+    files = os.listdir("balibase/RV11.unaligned/")
+    for file in files:
+        sp_, tc_ = bali_score("balibase/RV11.aligned/{}".format(file), "balibase/ClustalW/{}".format(file))
+        sp += sp_
+        tc += tc_
+    sp /= len(files)
+    tc /= len(files)
+    print("\nMean score :")
+    print("TC = {}".format(tc))
+    print("SP = {}".format(sp))
 
 #res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
 # (10, 1): (0.41608800440831978, 0.25394736842105264),
