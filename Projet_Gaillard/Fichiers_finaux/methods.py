@@ -1356,8 +1356,8 @@ def save_to_fasta(sequences,outputfile):
 
 def align_score(file):
     seq = align_fasta(file)
-    save_to_fasta(seq,file+"_aligned.fasta")
-    return bali_score("balibase/RV11.aligned/{}".format(file), file+"_aligned.fasta")
+    save_to_fasta(seq,"balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta")
+    return bali_score("balibase/RV11.aligned/{}".format(file), "balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta")
     
 ##################################### V/ Optimization of cost coefficients ##########################################
     
