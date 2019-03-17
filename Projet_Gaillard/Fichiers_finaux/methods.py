@@ -1026,9 +1026,10 @@ class NeedlemanWunsch:
             for r in rec:
                 seq = {"seq" : r.seq}
                 seq["name"] = r.name
-                chain = r.name.split("_")[1]
-                if chain=="":
-                    chain=None
+                if "_" in r.name:
+                    chain = r.name.split("_")[1]
+                    if chain=="":
+                        chain=None
                 if cout_hse in self.costs:
                     desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
                     seq["hse"] = desc["hse"]
@@ -1064,7 +1065,7 @@ class NeedlemanWunsch:
                 seq["name"] = r.name
                 chain=None
                 if "_" in r.name:
-                    chain = r.name.split("_")
+                    chain = r.name.split("_")[1]
                     if chain=="":
                         chain=None
                 if cout_hse in self.costs:
@@ -1312,7 +1313,7 @@ def align_fasta(file, algo="NW_blosum",silent=True):
         seq["name"] = r.name
         chain=None
         if "_" in r.name:
-            chain = r.name.split("_")
+            chain = r.name.split("_")[1]
             if chain=="":
                 chain=None
         if cout_hse in NW.costs:
