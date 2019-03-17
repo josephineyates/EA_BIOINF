@@ -82,7 +82,7 @@ def readFASTA(doc):
 
 def ouvertureFASTA(fichier):
     ''' Same as above '''
-    handle = open(fichier+".fasta")
+    handle = open(fichier)
     seqs = []
     for seqrec in SeqIO.parse(handle, "fasta"):
         seqs.append(seqrec)
@@ -1036,7 +1036,7 @@ class NeedlemanWunsch:
                 if chain=="":
                     chain=None
                 if cout_hse in self.costs:
-                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", chain=chain)
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
                     seq["hse"] = desc["hse"]
                 if cout_enf in self.costs:
                     values = decode_enf(r.name[:4], chain=chain)
@@ -1044,7 +1044,7 @@ class NeedlemanWunsch:
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
             sequences = self.run(sequences)
-            save_to_fasta(sequences)
+            save_to_fasta(sequences,"aligned/{}".format(file))
             sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
             SP.append(sp)
             TC.append(tc)
@@ -1082,7 +1082,7 @@ class NeedlemanWunsch:
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
             sequences = self.run(sequences)
-            save_to_fasta(sequences)
+            save_to_fasta(sequences,"aligned/{}".format(file))
             sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
             SP.append(sp)
             TC.append(tc)
@@ -1138,21 +1138,14 @@ def conversionAlignFASTA(fichier):
 	Bio.SeqIO.write(alignment,file,"fasta")
 	file.close()
 
-def score_align(clustalfile,reffile):
-    #clustalw_exe = r"C:\Users\josep\Anaconda3\Lib\site-packages\Bio\Align\Applications\_Clustalw.py"
-    #assert os.path.isfile(clustalw_exe), "Clustal W executable missing"
-    #cline=ClustalwCommandline(clustalw_exe, infile=reffile+".fasta", type="PROTEIN", output="FASTA", outfile=reffile+"_aligned.fasta", quiet=True)
+def score_align(reffile):
+    clustalw_exe = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\ClustalW2\ClustalW2.exe"
+    #   assert os.path.isfile(clustalw_exe), "Clustal W executable missing"
+    cline=ClustalwCommandline(clustalw_exe, infile=reffile+".fasta", type="PROTEIN", output="FASTA", outfile=reffile+"_aligned.fasta", quiet=True)
     #child = subprocess.call(str(clustalw_exe)+" -align -infile="+reffile_name+".fasta -seqnos ON -output fasta_aln -type protein", shell=True)
-
-    #print(cline())
-    """
-    #subprocess.check_call(args, *, stdin=None, stdout=None, stderr=None, shell=False)
-    #clustalw_cline() 
-    align = AlignIO.read(reffile_name+".aln", "clustal")
-    print(align)
-    conversionAlignFASTA(reffile_name+".aln")
-    #Alignseq = align_fasta("BBS11001.fasta")
-    bali_score("balibase/RV11.aligned/BBS11001.fasta", reffile_name+".aln_aligned.fasta")"""
+    print(cline())
+    
+#score_align("balibase/RV11.unaligned/BBS11001.fasta")
         
 
 def bali_score(reffile,testfile):
@@ -1357,7 +1350,7 @@ def save_to_fasta(sequences,outputfile):
 def align_score(file):
     seq = align_fasta(file)
     save_to_fasta(seq,"balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta")
-    return bali_score("balibase/RV11.aligned/{}".format(file), "balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta")
+    return bali_score("balibase/RV11.aligned/{}".format(file), "balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta.fasta")
     
 ##################################### V/ Optimization of cost coefficients ##########################################
     
@@ -1491,7 +1484,7 @@ def grid_search(opt="quick"):
         res[(g, e)] = compute(g, e)
     return res
 
-def eval_clustalw():
+def eval_clustalw(outputfile):
     sp,tc = {"clustal":[],"align":[]},{"clustal":[],"align":[]}
     files = os.listdir("balibase/RV11.unaligned/")
     for file in files:
@@ -1501,10 +1494,25 @@ def eval_clustalw():
         sp["align"].append(sp_)
         tc["clustal"].append(tc_clus)
         tc["align"].append(tc_)
+        with open("scores.txt","a") as f:
+            f.write(file+"\n")
+            f.write("Alignement scores : \n")
+            f.write("SP: {}".format(sp_)+"\n")
+            f.write("TC: {}".format(tc_)+"\n")
+            f.write("Clustal scores : \n")
+            f.write("SP: {}".format(sp_clus)+"\n")
+            f.write("TC: {}".format(tc_clus)+"\n")
     mean_sp_clus = np.sum(sp["clustal"])/len(files)
     mean_tc_clus = np.sum(tc["clustal"])/len(files)
     mean_sp = np.sum(sp["align"])/len(files)
     mean_tc = np.sum(tc["align"])/len(files)
+    with open(outputfile+".txt","a") as f:
+        f.write("Mean score clustal: ")
+        f.write("TC = {}".format(mean_tc_clus))
+        f.write("SP = {}".format(mean_sp_clus))
+        f.write("\nMean score alignement: ")
+        f.write("TC = {}".format(mean_tc))
+        f.write("SP = {}".format(mean_sp))
     print("\nMean score clustal:")
     print("TC = {}".format(mean_tc_clus))
     print("SP = {}".format(mean_sp_clus))
@@ -1513,7 +1521,8 @@ def eval_clustalw():
     print("TC = {}".format(mean_tc))
     print("SP = {}".format(mean_sp))
 
-eval_clustalw()
+eval_clustalw("scores")
+    
 #res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
 # (10, 1): (0.41608800440831978, 0.25394736842105264),
 # (10, 2): (0.50433622944747858, 0.27894736842105256),
