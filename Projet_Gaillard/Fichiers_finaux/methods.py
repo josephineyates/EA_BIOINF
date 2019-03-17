@@ -1461,8 +1461,8 @@ def optimize_gap(opt="quick"):
     alpha = 0.75
     g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
     e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
-    costs = [cout_blosum, cout_hse]
-    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[alpha, (1-alpha)])
+    costs = [cout_blosum, cout_hse, cout_enf]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[alpha, (1-alpha), 0.])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
     if opt=="all":
         def compute(p):
@@ -1545,25 +1545,25 @@ def eval_clustalw(outputfile):
         sp["align"].append(sp_)
         tc["clustal"].append(tc_clus)
         tc["align"].append(tc_)
-        with open("scores.txt","a") as f:
+        with open(outputfile+".txt","a") as f:
             f.write(file+"\n")
             f.write("Alignement scores : \n")
             f.write("SP: {}".format(sp_)+"\n")
             f.write("TC: {}".format(tc_)+"\n")
             f.write("Clustal scores : \n")
             f.write("SP: {}".format(sp_clus)+"\n")
-            f.write("TC: {}".format(tc_clus)+"\n")
+            f.write("TC: {}".format(tc_clus)+"\n\n")
     mean_sp_clus = np.sum(sp["clustal"])/len(files)
     mean_tc_clus = np.sum(tc["clustal"])/len(files)
     mean_sp = np.sum(sp["align"])/len(files)
     mean_tc = np.sum(tc["align"])/len(files)
     with open(outputfile+".txt","a") as f:
-        f.write("Mean score clustal: ")
-        f.write("TC = {}".format(mean_tc_clus))
-        f.write("SP = {}".format(mean_sp_clus))
-        f.write("\nMean score alignement: ")
-        f.write("TC = {}".format(mean_tc))
-        f.write("SP = {}".format(mean_sp))
+        f.write("Mean score clustal: \n")
+        f.write("TC = {}\n".format(mean_tc_clus))
+        f.write("SP = {}\n".format(mean_sp_clus))
+        f.write("\nMean score alignement: \n")
+        f.write("TC = {}\n".format(mean_tc))
+        f.write("SP = {}\n".format(mean_sp))
     print("\nMean score clustal:")
     print("TC = {}".format(mean_tc_clus))
     print("SP = {}".format(mean_sp_clus))
