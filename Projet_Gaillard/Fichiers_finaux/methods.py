@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Mar  5 16:04:50 2019
-
-@author: josep
-"""
 
 #################################################### README ################################################################################
 """ 
@@ -82,7 +76,7 @@ def readFASTA(doc):
 
 def ouvertureFASTA(fichier):
     ''' Same as above '''
-    handle = open(fichier+".fasta")
+    handle = open(fichier)
     seqs = []
     for seqrec in SeqIO.parse(handle, "fasta"):
         seqs.append(seqrec)
@@ -1036,7 +1030,7 @@ class NeedlemanWunsch:
                 if chain=="":
                     chain=None
                 if cout_hse in self.costs:
-                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", chain=chain)
+                    desc = get_descriptors("PDB/"+r.name[:4]+".cif", r.seq, chain=chain)
                     seq["hse"] = desc["hse"]
                 if cout_enf in self.costs:
                     values = decode_enf(r.name[:4], chain=chain)
@@ -1044,8 +1038,8 @@ class NeedlemanWunsch:
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
             sequences = self.run(sequences)
-            save_to_fasta(sequences)
-            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+            save_to_fasta(sequences,"aligned/{}".format(file.split(".fasta")[0]))
+            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "aligned/{}".format(file))
             SP.append(sp)
             TC.append(tc)
         print("TIME : {}".format(time()-t))
@@ -1082,8 +1076,8 @@ class NeedlemanWunsch:
                     seq["enf_max"] = max(values)
                 sequences.append(seq)
             sequences = self.run(sequences)
-            save_to_fasta(sequences)
-            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+            save_to_fasta(sequences,"aligned/{}".format(file.split(".fasta")[0]))
+            sp, tc = bali_score("balibase/RV11.aligned/{}".format(file), "aligned/{}".format(file))
             SP.append(sp)
             TC.append(tc)
         m_tc = np.mean(TC)
@@ -1129,8 +1123,6 @@ def NW_affine_multi(seq1, seq2, g, e, cout="blosum"): # coût est une fonction, 
 from Bio.Align.Applications import ClustalwCommandline   
 from Bio import AlignIO
 import Bio.SeqIO
-import subprocess
-import sys
 
 def conversionAlignFASTA(fichier):
 	alignment = AlignIO.read(fichier,"clustal")
@@ -1138,21 +1130,14 @@ def conversionAlignFASTA(fichier):
 	Bio.SeqIO.write(alignment,file,"fasta")
 	file.close()
 
-def score_align(clustalfile,reffile):
-    #clustalw_exe = r"C:\Users\josep\Anaconda3\Lib\site-packages\Bio\Align\Applications\_Clustalw.py"
-    #assert os.path.isfile(clustalw_exe), "Clustal W executable missing"
-    #cline=ClustalwCommandline(clustalw_exe, infile=reffile+".fasta", type="PROTEIN", output="FASTA", outfile=reffile+"_aligned.fasta", quiet=True)
+def score_align(reffile):
+    clustalw_exe = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\ClustalW2\ClustalW2.exe"
+    #   assert os.path.isfile(clustalw_exe), "Clustal W executable missing"
+    cline=ClustalwCommandline(clustalw_exe, infile=reffile+".fasta", type="PROTEIN", output="FASTA", outfile=reffile+"_aligned.fasta", quiet=True)
     #child = subprocess.call(str(clustalw_exe)+" -align -infile="+reffile_name+".fasta -seqnos ON -output fasta_aln -type protein", shell=True)
-
-    #print(cline())
-    """
-    #subprocess.check_call(args, *, stdin=None, stdout=None, stderr=None, shell=False)
-    #clustalw_cline() 
-    align = AlignIO.read(reffile_name+".aln", "clustal")
-    print(align)
-    conversionAlignFASTA(reffile_name+".aln")
-    #Alignseq = align_fasta("BBS11001.fasta")
-    bali_score("balibase/RV11.aligned/BBS11001.fasta", reffile_name+".aln_aligned.fasta")"""
+    print(cline())
+    
+#score_align("balibase/RV11.unaligned/BBS11001.fasta")
         
 
 def bali_score(reffile,testfile):
@@ -1314,16 +1299,14 @@ def bali_score(reffile,testfile):
 
 from Bio.Seq import Seq
 
-def align_fasta(file, algo="NW_blosum"):
+def align_fasta(file, algo="NW_blosum",silent=True):
     rec = readFASTA("balibase/RV11.unaligned/{}".format(file))
     sequences = []
     g, e = 11, 2
     if algo == "NW_blosum":
         NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
     elif algo == "NW_structural":
-        
-        ############# TODO ##################
-        NW = NeedlemanWunsch(cost_functions=cout_blosum, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1]) 
+        NW = NeedlemanWunsch(cost_functions=[cout_blosum, cout_hse], gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.75, 0.25]) 
     for r in rec:
         seq = {"seq" : r.seq}
         seq["name"] = r.name
@@ -1341,22 +1324,23 @@ def align_fasta(file, algo="NW_blosum"):
             seq["enf_max"] = max(values)
         sequences.append(seq)
     sequences = NW.run(sequences)
-    for seq in sequences:
-        print(seq["seq"])
+    if not(silent):
+        for seq in sequences:
+            print(seq["seq"])
     return sequences
 
-def save_to_fasta(sequences):
+def save_to_fasta(sequences,outputfile):
     seqRec = []
     for seq in sequences:
         seqr = SeqIO.SeqRecord(Seq(seq["seq"]), id=seq["name"], name=seq["name"], description="", dbxrefs=[])
         seqRec.append(seqr)
-    with open("save_alignment.fasta", "w") as output_handle:
+    with open(outputfile+".fasta", "w") as output_handle:
         SeqIO.write(seqRec, output_handle, "fasta")
 
-def align_score(file):
-    seq = align_fasta(file)
-    save_to_fasta(seq)
-    bali_score("balibase/RV11.aligned/{}".format(file), "save_alignment.fasta")
+def align_score(file, algo="NW_blosum", silent=True):
+    seq = align_fasta(file, algo=algo, silent=True)
+    save_to_fasta(seq,"balibase/alignedfiles/"+file.split(".")[0]+"_aligned")
+    return bali_score("balibase/RV11.aligned/{}".format(file), "balibase/alignedfiles/"+file.split(".")[0]+"_aligned.fasta")
     
 ##################################### V/ Optimization of cost coefficients ##########################################
     
@@ -1396,15 +1380,18 @@ def optimize_hse(opt="quick"):
     costs = [cout_blosum, cout_hse]
     NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.6])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
-    def compute(x):
-        NW.set_coefs([x, (1-x)])
-        if opt=="all":
+    if opt=="all":
+        def compute(x):
+            NW.set_coefs([x, (1-x)])
             sp, tc = NW.compute_score()
-        if opt=="quick":
+            return sp
+    elif opt=="quick":
+        def compute(x):
+            NW.set_coefs([x, (1-x)])
             sp, tc = NW.quick_score()
-        else:
-            raise Exception("Not valid option")
-        return sp
+            return sp
+    else:
+        raise Exception("Not valid option")
     optimizer = BayesianOptimization(
             f=compute,
             pbounds=pbounds,
@@ -1414,23 +1401,40 @@ def optimize_hse(opt="quick"):
     optimizer.maximize(init_points=2, n_iter=10)
     return optimizer
 
+#opt.res = {'params': {'x': 0.80000000000000004}, 'target': 0.50391280319014775},
+# {'params': {'x': 0.417022004702574}, 'target': 0.42763717874034002},
+# {'params': {'x': 0.7203244934421581}, 'target': 0.50453699314534262},
+# {'params': {'x': 0.99999999999999989}, 'target': 0.49853588473307109},
+# {'params': {'x': 0.880233893367939}, 'target': 0.5001439137838054},
+# {'params': {'x': 0.74922618884019465}, 'target': 0.50694027013917509},
+# {'params': {'x': 0.0}, 'target': 0.16182227516755468},
+# {'params': {'x': 0.71894420516850954}, 'target': 0.50423612901153303},
+# {'params': {'x': 0.76183612020511871}, 'target': 0.50374490594876964},
+# {'params': {'x': 0.7533472502886801}, 'target': 0.50350607741838649},
+# {'params': {'x': 0.71088295262253365}, 'target': 0.5041651050512469},
+# {'params': {'x': 0.7557868016834659}, 'target': 0.50437430694498286},
+# {'params': {'x': 0.7531278530035429}, 'target': 0.50349034250141078}]
+
 def optimize_enf(opt="quick"):
     ''' Optimization of balance between cost functions in the structural case '''
     pbounds = {'x': (0, 1)}
     g, e = 11, 2
-    alpha = 0.5
+    alpha = 0.75
     costs = [cout_blosum, cout_hse, cout_enf]
     NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[0.4, 0.4, 0.2])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
-    def compute(x):
-        NW.set_coefs([alpha * x, (1-alpha) * x, (1-x)])
-        if opt=="all":
+    if opt=="all":
+        def compute(x):
+            NW.set_coefs([alpha * x, (1-alpha) * x, (1-x)])        
             sp, tc = NW.compute_score()
-        if opt=="quick":
+            return sp
+    elif opt=="quick":
+        def compute(x):
+            NW.set_coefs([alpha * x, (1-alpha) * x, (1-x)])        
             sp, tc = NW.quick_score()
-        else:
-            raise Exception("Not valid option")
-        return sp
+            return sp
+    else:
+        raise Exception("Not valid option")       
     optimizer = BayesianOptimization(
             f=compute,
             pbounds=pbounds,
@@ -1439,36 +1443,62 @@ def optimize_enf(opt="quick"):
     optimizer.probe(params={"x":0.8}, lazy=True)
     optimizer.maximize(init_points=2, n_iter=10)
     return optimizer
+
+#opt.res = [{'params': {'x': 0.80000000000000004}, 'target': 0.50019749681407499},
+# {'params': {'x': 0.417022004702574}, 'target': 0.39439983213864988},
+# {'params': {'x': 0.7203244934421581}, 'target': 0.48414828570551494},
+# {'params': {'x': 1.0}, 'target': 0.50718810044675811},
+# {'params': {'x': 0.92135395452107571}, 'target': 0.49619335268438719},
+# {'params': {'x': 0.0}, 'target': 0.16182227516755468}]
 
 def optimize_gap(opt="quick"):
     ''' Optimization of the enf penalty for gaps '''
     pbounds = {'p' : (0, 1)}
     p = 0.5
     g_opt=11
-    e_opt=1
+    e_opt=2
+    alpha = 0.75
     g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
     e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
-    costs = [cout_blosum]
-    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[1])
+    costs = [cout_blosum, cout_hse]
+    NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="NJ", cost_coefs=[alpha, (1-alpha)])
 #   NW = NeedlemanWunsch(cost_functions=costs, gap_opening_function=g, gap_extending_function=e, clustering="UPGMA", cost_coefs=[0.4, 0.4, 0.2])
-    def compute(p):
-        g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
-        e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
-        NW.set_ge(g, e)
-        if opt=="all":
+    if opt=="all":
+        def compute(p):
+            g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
+            e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
+            NW.set_ge(g, e)
             sp, tc = NW.compute_score()
-        if opt=="quick":
+            return sp
+    elif opt=="quick":
+        def compute(p):
+            g = lambda x, y : gap_profiled(x, y, g=g_opt, p=p)
+            e = lambda x, y : extend_profiled(x, y, e=e_opt, p=p)
+            NW.set_ge(g, e)
             sp, tc = NW.quick_score()
-        else:
-            raise Exception("Not valid option")
-        return sp
+            return sp
+    else:
+        raise Exception("Not valid option")
     optimizer = BayesianOptimization(
             f=compute,
             pbounds=pbounds,
             random_state=1,
             )
-    optimizer.maximize(init_points=2, n_iter=20)
+    optimizer.maximize(init_points=2, n_iter=10)
     return optimizer
+
+#opt.res = [{'params': {'p': 0.417022004702574}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.7203244934421581}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.00036498883129010284}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.98648421847084022}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.98926748155005584}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.94280886121358987}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.32137409149849328}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.64312095736728658}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.67291372712435771}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.31990256029992292}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.72711884937543281}, 'target': 0.50718810044675811},
+# {'params': {'p': 0.61333874835176583}, 'target': 0.50718810044675811}]
 
 def grid_search(opt="quick"):
     g, e = 11, 1
@@ -1490,19 +1520,6 @@ def grid_search(opt="quick"):
         res[(g, e)] = compute(g, e)
     return res
 
-def eval_clustalw():
-    sp, tc = 0, 0
-    files = os.listdir("balibase/RV11.unaligned/")
-    for file in files:
-        sp_, tc_ = bali_score("balibase/RV11.aligned/{}".format(file), "balibase/ClustalW/{}".format(file))
-        sp += sp_
-        tc += tc_
-    sp /= len(files)
-    tc /= len(files)
-    print("\nMean score :")
-    print("TC = {}".format(tc))
-    print("SP = {}".format(sp))
-
 #res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
 # (10, 1): (0.41608800440831978, 0.25394736842105264),
 # (10, 2): (0.50433622944747858, 0.27894736842105256),
@@ -1512,5 +1529,49 @@ def eval_clustalw():
 # (13, 2): (0.49753416550527296, 0.29026315789473683),
 # (13, 6): (0.46949131392905497, 0.255),
 # (14, 4): (0.50545745015904853, 0.28078947368421053),
-# (15, 6): (0.47925907268134837, 0.26236842105263153)}         
+# (15, 6): (0.47925907268134837, 0.26236842105263153)}     
+
+def eval_clustalw(outputfile):
+    sp,tc = {"clustal":[],"align":[]},{"clustal":[],"align":[]}
+    files = os.listdir("balibase/RV11.unaligned/")
+    for file in files:
+        if "struct" in outputfile:
+            sp_, tc_ = align_score(file, algo="NW_structural")
+        else:
+            sp_, tc_ = align_score(file)
+        sp_clus, tc_clus = bali_score("balibase/RV11.aligned/{}".format(file), "balibase/ClustalW/{}".format(file))
+        sp["clustal"].append(sp_clus)
+        sp["align"].append(sp_)
+        tc["clustal"].append(tc_clus)
+        tc["align"].append(tc_)
+        with open("scores.txt","a") as f:
+            f.write(file+"\n")
+            f.write("Alignement scores : \n")
+            f.write("SP: {}".format(sp_)+"\n")
+            f.write("TC: {}".format(tc_)+"\n")
+            f.write("Clustal scores : \n")
+            f.write("SP: {}".format(sp_clus)+"\n")
+            f.write("TC: {}".format(tc_clus)+"\n")
+    mean_sp_clus = np.sum(sp["clustal"])/len(files)
+    mean_tc_clus = np.sum(tc["clustal"])/len(files)
+    mean_sp = np.sum(sp["align"])/len(files)
+    mean_tc = np.sum(tc["align"])/len(files)
+    with open(outputfile+".txt","a") as f:
+        f.write("Mean score clustal: ")
+        f.write("TC = {}".format(mean_tc_clus))
+        f.write("SP = {}".format(mean_sp_clus))
+        f.write("\nMean score alignement: ")
+        f.write("TC = {}".format(mean_tc))
+        f.write("SP = {}".format(mean_sp))
+    print("\nMean score clustal:")
+    print("TC = {}".format(mean_tc_clus))
+    print("SP = {}".format(mean_sp_clus))
+    
+    print("\nMean score alignment:")
+    print("TC = {}".format(mean_tc))
+    print("SP = {}".format(mean_sp))
+
+#eval_clustalw("scores")
+
+    
                      
