@@ -1339,7 +1339,7 @@ def align_fasta(file, algo="NW_blosum"):
             values = decode_enf(r.name[:4], chain=chain)
             seq["enf"] = values
             seq["enf_max"] = max(values)
-            sequences.append(seq)
+        sequences.append(seq)
     sequences = NW.run(sequences)
     for seq in sequences:
         print(seq["seq"])
@@ -1503,7 +1503,6 @@ def eval_clustalw():
     print("TC = {}".format(tc))
     print("SP = {}".format(sp))
 
-eval_clustalw()
 #res = {(8, 1): (0.39723254408655229, 0.21473684210526311),
 # (10, 1): (0.41608800440831978, 0.25394736842105264),
 # (10, 2): (0.50433622944747858, 0.27894736842105256),
